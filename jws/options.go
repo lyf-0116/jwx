@@ -235,6 +235,9 @@ func WithKey(alg jwa.KeyAlgorithm, key any, options ...WithKeySuboption) SignVer
 // require that both `alg` and `kid` fields in the JWS _and_ the
 // key match before a key is considered to be used.
 //
+// Keys whose `use` is not "sig", or whose `key_ops` member is present
+// without "verify", are rejected during selection.
+//
 // There are ways to override this behavior, but they must be explicitly
 // specified by the caller.
 //

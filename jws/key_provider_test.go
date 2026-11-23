@@ -127,6 +127,75 @@ func TestKeySetProviderUseEncSurfacesError(t *testing.T) {
 		`error should explain the mismatch`)
 }
 
+// TestKeySetProviderKeyOpsEncSurfacesError mirrors the use=enc rejection
+// for key_ops: a key that only advertises encryption operations must not
+// reach the verification sink.
+func TestKeySetProviderKeyOpsEncSurfacesError(t *testing.T) {
+	t.Parallel()
+
+	rsaRaw, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	rsaKey, err := jwk.Import[jwk.Key](rsaRaw)
+	require.NoError(t, err)
+	require.NoError(t, rsaKey.Set(jwk.KeyIDKey, "signer-kid"))
+	require.NoError(t, rsaKey.Set(jwk.KeyOpsKey, jwk.KeyOperationList{jwk.KeyOpEncrypt, jwk.KeyOpDecrypt}))
+
+	kp := &keySetProvider{
+		requireKid: false,
+	}
+
+	sig := NewSignature()
+	hdr := NewHeaders()
+	require.NoError(t, hdr.Set(AlgorithmKey, jwa.RS256()))
+	sig.SetProtectedHeaders(hdr)
+
+	emitted, err := kp.selectKey(&countingKeySink{}, rsaKey, sig, &Message{})
+	require.False(t, emitted, `selectKey should not emit a candidate on key_ops without verify`)
+	require.Error(t, err, `selectKey should error when key_ops excludes verify`)
+	require.Contains(t, err.Error(), `signer-kid`, `error should name the kid`)
+	require.Contains(t, err.Error(), `key_ops=`, `error should quote key_ops`)
+	require.Contains(t, err.Error(), `not usable for signature verification`,
+		`error should explain the mismatch`)
+	require.Contains(t, err.Error(), `verify`, `error should name the expected operation`)
+}
+
+// TestKeySetProviderKeyOpsVerifyAllowed pins that a key advertising
+// verify is selected, and that an absent key_ops member remains
+// unrestricted.
+func TestKeySetProviderKeyOpsVerifyAllowed(t *testing.T) {
+	t.Parallel()
+
+	for name, ops := range map[string]jwk.KeyOperationList{
+		"verify":          {jwk.KeyOpSign, jwk.KeyOpVerify},
+		"missing key_ops": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rsaRaw, err := rsa.GenerateKey(rand.Reader, 2048)
+			require.NoError(t, err)
+			rsaKey, err := jwk.Import[jwk.Key](rsaRaw)
+			require.NoError(t, err)
+			require.NoError(t, rsaKey.Set(jwk.AlgorithmKey, jwa.RS256()))
+			if ops != nil {
+				require.NoError(t, rsaKey.Set(jwk.KeyOpsKey, ops))
+			}
+
+			kp := &keySetProvider{requireKid: false}
+			sig := NewSignature()
+			hdr := NewHeaders()
+			require.NoError(t, hdr.Set(AlgorithmKey, jwa.RS256()))
+			sig.SetProtectedHeaders(hdr)
+
+			sink := &countingKeySink{}
+			emitted, err := kp.selectKey(sink, rsaKey, sig, &Message{})
+			require.NoError(t, err)
+			require.True(t, emitted)
+			require.Len(t, sink.pairs, 1)
+		})
+	}
+}
+
 // fixedFetcher is a jwk.Fetcher that returns the same JWK Set for any URL.
 type fixedFetcher struct {
 	set jwk.Set
@@ -166,6 +235,39 @@ func TestJKUProviderUseEncSurfacesError(t *testing.T) {
 	require.Error(t, err, `jkuProvider.FetchKeys should error on use=enc`)
 	require.Contains(t, err.Error(), `signer-kid`, `error should name the kid`)
 	require.Contains(t, err.Error(), `use="enc"`, `error should quote the usage`)
+	require.Contains(t, err.Error(), `not usable for signature verification`,
+		`error should explain the mismatch`)
+}
+
+// TestJKUProviderKeyOpsEncSurfacesError pins that the jku provider's
+// independent selection path applies the same key_ops constraint as
+// keySetProvider.
+func TestJKUProviderKeyOpsEncSurfacesError(t *testing.T) {
+	t.Parallel()
+
+	rsaRaw, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	pub, err := jwk.Import[jwk.Key](&rsaRaw.PublicKey)
+	require.NoError(t, err)
+	require.NoError(t, pub.Set(jwk.KeyIDKey, "signer-kid"))
+	require.NoError(t, pub.Set(jwk.KeyOpsKey, jwk.KeyOperationList{jwk.KeyOpEncrypt}))
+
+	set := jwk.NewSet()
+	require.NoError(t, set.AddKey(pub))
+
+	kp := jkuProvider{fetcher: fixedFetcher{set: set}}
+
+	sig := NewSignature()
+	hdr := NewHeaders()
+	require.NoError(t, hdr.Set(AlgorithmKey, jwa.RS256()))
+	require.NoError(t, hdr.Set(KeyIDKey, "signer-kid"))
+	require.NoError(t, hdr.Set(JWKSetURLKey, "https://example.test/jwks"))
+	sig.SetProtectedHeaders(hdr)
+
+	err = kp.FetchKeys(context.Background(), &countingKeySink{}, sig, &Message{})
+	require.Error(t, err, `jkuProvider.FetchKeys should error on key_ops without verify`)
+	require.Contains(t, err.Error(), `signer-kid`, `error should name the kid`)
+	require.Contains(t, err.Error(), `key_ops=`, `error should quote key_ops`)
 	require.Contains(t, err.Error(), `not usable for signature verification`,
 		`error should explain the mismatch`)
 }

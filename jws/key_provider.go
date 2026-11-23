@@ -112,6 +112,17 @@ type keySetProvider struct {
 	multipleKeysPerKeyID bool // true if we should attempt to match multiple keys per key ID. if false we assume that only one key exists for a given key ID
 }
 
+// keyOpsAllow reports whether key's "key_ops" member permits op.
+// A missing "key_ops" member is unrestricted. When the member is
+// present, even as an empty list, it must contain op.
+func keyOpsAllow(key jwk.Key, op jwk.KeyOperation) (jwk.KeyOperationList, bool) {
+	ops, ok := key.KeyOps()
+	if !ok {
+		return nil, true
+	}
+	return ops, slices.Contains(ops, op)
+}
+
 // selectKey routes key into sink with the algorithm(s) it should be
 // tried under. The boolean return reports whether at least one
 // (alg, key) candidate was actually emitted into sink: a nil error with
@@ -132,6 +143,11 @@ func (kp *keySetProvider) selectKey(sink KeySink, key jwk.Key, sig *Signature, _
 			kid, _ := key.KeyID()
 			return false, fmt.Errorf(`key with kid %q is marked use=%q, not usable for signature verification (expected %q)`, kid, usage, jwk.ForSignature.String())
 		}
+	}
+
+	if ops, ok := keyOpsAllow(key, jwk.KeyOpVerify); !ok {
+		kid, _ := key.KeyID()
+		return false, fmt.Errorf(`key with kid %q is marked key_ops=%q, not usable for signature verification (expected %q)`, kid, ops, jwk.KeyOpVerify)
 	}
 
 	if v, ok := key.Algorithm(); ok {
@@ -346,6 +362,10 @@ func (kp jkuProvider) FetchKeys(ctx context.Context, sink KeySink, sig *Signatur
 		if usage != "" && usage != jwk.ForSignature.String() {
 			return fmt.Errorf(`key with kid %q is marked use=%q, not usable for signature verification (expected %q)`, kid, usage, jwk.ForSignature.String())
 		}
+	}
+
+	if ops, ok := keyOpsAllow(key, jwk.KeyOpVerify); !ok {
+		return fmt.Errorf(`key with kid %q is marked key_ops=%q, not usable for signature verification (expected %q)`, kid, ops, jwk.KeyOpVerify)
 	}
 
 	algs, err := keyalg.Candidates(key)

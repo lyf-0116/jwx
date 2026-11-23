@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/lestrrat-go/jwx/v4/jwa"
+	"github.com/lestrrat-go/jwx/v4/jwe/jwebb"
 	"github.com/lestrrat-go/jwx/v4/jwk"
 )
 
@@ -107,6 +109,60 @@ type keySetProvider struct {
 	requireKid bool
 }
 
+var (
+	keyOpsDirect  = []jwk.KeyOperation{jwk.KeyOpDecrypt}
+	keyOpsECDH    = []jwk.KeyOperation{jwk.KeyOpDeriveKey, jwk.KeyOpDeriveBits, jwk.KeyOpUnwrapKey}
+	keyOpsWrapped = []jwk.KeyOperation{jwk.KeyOpUnwrapKey}
+)
+
+// keyOpsForDecryption returns the "key_ops" operations that permit
+// decryption with alg. A nil result means the algorithm has no
+// well-defined operation mapping (for example an extension algorithm),
+// so the "key_ops" member is not consulted.
+//
+// The operation is not always "decrypt": key-wrapping algorithms use
+// "unwrapKey", and ECDH-ES variants derive key material.
+func keyOpsForDecryption(alg jwa.KeyEncryptionAlgorithm) []jwk.KeyOperation {
+	algStr := alg.String()
+	switch {
+	case jwebb.IsDirect(algStr):
+		return keyOpsDirect
+	case jwebb.IsECDHES(algStr):
+		return keyOpsECDH
+	case jwebb.IsRSA15(algStr), jwebb.IsRSAOAEP(algStr),
+		jwebb.IsAESKW(algStr), jwebb.IsAESGCMKW(algStr), jwebb.IsPBES2(algStr):
+		return keyOpsWrapped
+	default:
+		return nil
+	}
+}
+
+// checkKeyOps verifies that key's "key_ops" member, when present,
+// permits at least one of the operations required by the algorithm.
+// An absent "key_ops" member is unrestricted.
+func checkKeyOps(key jwk.Key, alg jwa.KeyEncryptionAlgorithm) error {
+	allowed := keyOpsForDecryption(alg)
+	if len(allowed) == 0 {
+		return nil
+	}
+
+	ops, ok := key.KeyOps()
+	if !ok {
+		return nil
+	}
+	for _, op := range allowed {
+		if slices.Contains(ops, op) {
+			return nil
+		}
+	}
+
+	kid, _ := key.KeyID()
+	if len(allowed) == 1 {
+		return fmt.Errorf(`key %q has key_ops=%q, not usable for decryption with algorithm %q (expected %q for decryption)`, kid, ops, alg, allowed[0])
+	}
+	return fmt.Errorf(`key %q has key_ops=%q, not usable for decryption with algorithm %q (expected one of %q)`, kid, ops, alg, allowed)
+}
+
 func (kp *keySetProvider) selectKey(sink KeySink, key jwk.Key, r Recipient, msg *Message) error {
 	if uk, ok := key.(jwk.UnsupportedKey); ok {
 		kid, _ := uk.KeyID()
@@ -126,6 +182,9 @@ func (kp *keySetProvider) selectKey(sink KeySink, key jwk.Key, r Recipient, msg 
 			return fmt.Errorf(`invalid key encryption algorithm %s`, v)
 		}
 
+		if err := checkKeyOps(key, kalg); err != nil {
+			return err
+		}
 		sink.Key(kalg, key)
 		return nil
 	}
@@ -147,6 +206,9 @@ func (kp *keySetProvider) selectKey(sink KeySink, key jwk.Key, r Recipient, msg 
 		kalg, ok := jwa.LookupKeyEncryptionAlgorithm(v.String())
 		if !ok {
 			continue
+		}
+		if err := checkKeyOps(key, kalg); err != nil {
+			return err
 		}
 		sink.Key(kalg, key)
 		return nil

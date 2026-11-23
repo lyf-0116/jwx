@@ -389,6 +389,8 @@ source: [examples/jwe_decrypt_with_key_example_test.go](https://github.com/jwx-g
 
 To decrypt a payload using JWKS, the JWE's `kid` header selects a key from the set; the key's `alg` field (when present) is used for the decrypt-time dispatch. When the JWK lacks `alg`, the recipient's `alg` header (per-recipient first, then protected) is used as a fallback — `jwe.Decrypt` re-checks the chosen `alg` against the integrity-protected protected header before any cryptographic call (RFC 7516 §7.2.1).
 
+Keys whose JWK `use` member is not `enc`, or whose `key_ops` member excludes the operation implied by the key-management algorithm, are rejected during key selection. Key-wrapping algorithms such as RSA-OAEP and AES-KW require `unwrapKey`; `dir` requires `decrypt`; ECDH-ES variants accept derivation operations and `unwrapKey`.
+
 For more discussion on why `alg` cannot be inferred from the key alone, see "[Why don't you automatically infer the algorithm for `jws.Verify`?](99-faq.md#why-dont-you-automatically-infer-the-algorithm-for-jwsverify-)" — the same reasoning applies to `jwe.Decrypt()`.
 
 `kid` IS required by default. The example below uses `jwe.WithRequireKid(false)` to opt out and try every key in the set; this is slower and looser, intended for legacy peers that don't emit `kid`.

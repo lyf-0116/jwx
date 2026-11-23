@@ -448,6 +448,8 @@ See [Small-order Ed25519 keys](./04-jwk.md#small-order-ed25519-keys) for details
 
 To verify a payload using JWKS, by default you will need your payload and JWKS to have matching `kid` and `alg` fields.
 
+Keys whose JWK `use` member is not `sig`, or whose `key_ops` member is present without `verify`, are rejected during key selection.
+
 First the `alg` field's requirement is the same for using a single key. But you could, at a possible cost of trying multiple algorithms, let this module infer the algorithm to use by using the `jws.InferAlgorithmFromKey(true)` sub-option to `jws.WithKeySet()` (or `jwt.WithKeySet()`) See the example below for details.
 
 (ref: "[Why don't you automatically infer the algorithm for `jws.Verify`?](99-faq.md#why-dont-you-automatically-infer-the-algorithm-for-jwsverify-)").

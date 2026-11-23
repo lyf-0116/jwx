@@ -226,6 +226,11 @@ func WithKey(alg jwa.KeyAlgorithm, key any, options ...WithKeySuboption) Encrypt
 //   - For untrusted issuers, prefer narrowing the keyset to keys
 //     already typed for the expected algorithm rather than relying
 //     on the header-fallback path.
+//   - Keys whose `use` is not "enc", or whose `key_ops` member excludes
+//     the operation implied by the key-management algorithm, are
+//     rejected during selection. Key-wrapping algorithms require
+//     "unwrapKey" (not "decrypt"); "dir" requires "decrypt"; ECDH-ES
+//     variants accept derivation operations and "unwrapKey".
 func WithKeySet(set jwk.Set, options ...WithKeySetSuboption) DecryptOption {
 	requireKid := true
 	for _, opt := range options {
