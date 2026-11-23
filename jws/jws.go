@@ -470,8 +470,19 @@ func parse(protected, payload, signature []byte) (*Message, error) {
 	var msg Message
 	msg.payload = decodedPayload
 	// Compact serialization has no way to express "present but empty":
-	// an empty middle segment is genuinely absent (detached). Presence is
-	// therefore simply whether the middle segment carried any bytes.
+	// an empty middle segment is the compact form of a detached payload
+	// (RFC 7515 Appendix F), the exact wire form produced by Sign with
+	// WithDetachedPayload. A genuine in-band JWS over an empty payload and
+	// a detached JWS are therefore indistinguishable on the compact wire;
+	// adopt the detached interpretation, matching what UnmarshalJSON does
+	// when the "payload" member is omitted.
+	//
+	// Recording the detached state (not just payload presence) is what keeps
+	// the two parse paths on the same model: without it, a detached compact
+	// JWS round-tripped through Parse + MarshalJSON/Compact silently grew an
+	// in-band empty "payload" member, after which Verify with
+	// WithDetachedPayload rejected it as "already has a payload".
+	msg.detached = len(payload) == 0
 	msg.payloadPresent = len(payload) > 0
 	msg.signatures = append(msg.signatures, &Signature{
 		protected: hdr,
