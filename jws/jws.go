@@ -136,6 +136,12 @@ func validateKeyBeforeUse(key any) error {
 // is set, so the produced JWS is at least RFC 7797 §3 conformant on
 // the producer side.
 //
+// When multiple signers are used, they must all agree on the effective
+// `b64` value (an unset value means true). Sign rejects the request before
+// building any signature if they do not: a JSON JWS has a single payload
+// member shared by every signature, so it cannot mix encoded and unencoded
+// payloads.
+//
 // Look for options that return `jws.SignOption` or `jws.SignVerifyOption`
 // for a complete list of options that can be passed to this function.
 //
@@ -165,6 +171,10 @@ func Sign(payload []byte, options ...SignOption) ([]byte, error) {
 	// user to spell it out as `jws.Sign(..., jws.WithJSON(), jws.WithKey(...), jws.WithKey(...))`
 	if sc.format == fmtCompact && lsigner != 1 {
 		return nil, makeSignError(prefixJwsSign, `cannot have multiple signers (keys) specified for compact serialization. Use only one jws.WithKey()`)
+	}
+
+	if err := sc.validateB64Consistency(); err != nil {
+		return nil, err
 	}
 
 	if sc.payloadReader != nil {

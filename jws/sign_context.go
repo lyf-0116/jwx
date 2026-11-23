@@ -142,6 +142,45 @@ func (sc *signContext) ProcessOptions(options []SignOption) error {
 	return nil
 }
 
+// signatureB64 returns the RFC 7797 "b64" value that signatureBuilder.Build
+// will use for sb, without mutating or signing anything. An unset value means
+// true per RFC 7797. Compact serialization merges the public header into the
+// protected header before signing, so a b64 value there participates too;
+// JSON serialization keeps the public header out of the signing input.
+func (sc *signContext) signatureB64(sb *signatureBuilder) bool {
+	if sb.protected != nil {
+		if b64, ok := sb.protected.B64(); ok {
+			return b64
+		}
+	}
+	if sc.format == fmtCompact && sb.public != nil {
+		if b64, ok := sb.public.B64(); ok {
+			return b64
+		}
+	}
+	return true
+}
+
+// validateB64Consistency rejects multi-signature requests whose signers do
+// not agree on the RFC 7797 "b64" flag. A JSON JWS has one payload member
+// shared by every signature, so one signer cannot encode it while another
+// leaves it raw. Detect that before building any signature: signing first and
+// failing during serialization would waste the signing work and report the
+// problem from the wrong layer.
+func (sc *signContext) validateB64Consistency() error {
+	if len(sc.sigbuilders) < 2 {
+		return nil
+	}
+
+	b64 := sc.signatureB64(sc.sigbuilders[0])
+	for idx, sb := range sc.sigbuilders[1:] {
+		if got := sc.signatureB64(sb); got != b64 {
+			return makeSignError(prefixJwsSign, `signature %d disagrees with earlier signers on the RFC 7797 "b64" flag; all signers must use the same b64 value`, idx+1)
+		}
+	}
+	return nil
+}
+
 func (sc *signContext) PopulateMessage(m *Message) error {
 	m.payload = sc.payload
 	m.detached = sc.detached

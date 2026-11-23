@@ -92,7 +92,6 @@ func (sc *signContext) signStreaming() ([]byte, error) {
 
 	signers := make([]streamingSigner, 0, len(sc.sigbuilders))
 	var b64 bool
-	var b64Set bool
 
 	for idx, sb := range sc.sigbuilders {
 		alg := sb.alg
@@ -152,14 +151,11 @@ func (sc *signContext) signStreaming() ([]byte, error) {
 		}
 
 		// A multi-signature JWS has a single payload segment on the
-		// wire, so every signer must agree on the RFC 7797 "b64" flag
-		// or the produced JWS is internally inconsistent.
-		thisB64 := getB64Value(signingHeaders)
-		if !b64Set {
-			b64 = thisB64
-			b64Set = true
-		} else if thisB64 != b64 {
-			return nil, makeSignError(prefixJwsSign, `signature %d disagrees with earlier signers on the RFC 7797 "b64" flag; all signers must use the same b64 value`, idx)
+		// wire. Sign() preflight already rejected signers that disagree
+		// on the RFC 7797 "b64" flag, so the first signer fixes the
+		// encoding used to stream the shared payload.
+		if idx == 0 {
+			b64 = getB64Value(signingHeaders)
 		}
 
 		hdrbuf, err := json.Marshal(signingHeaders)
