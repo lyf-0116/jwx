@@ -6,6 +6,7 @@ import (
 
 	"github.com/lestrrat-go/jwx/v4/jwa"
 	"github.com/lestrrat-go/jwx/v4/jwe"
+	"github.com/lestrrat-go/jwx/v4/jwk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,6 +95,39 @@ func TestDecryptWithDecryptedRecipient(t *testing.T) {
 		require.Len(t, msg.Recipients(), 1, `a flattened message has one recipient`)
 		require.Same(t, msg.Recipients()[0], used)
 		require.NotEmpty(t, used.EncryptedKey(), `recipient should carry the encrypted key that was unwrapped`)
+	})
+
+	t.Run("flattened JSON key set", func(t *testing.T) {
+		t.Parallel()
+
+		key, err := jwk.Import[jwk.SymmetricKey](keyA)
+		require.NoError(t, err, `jwk.Import should succeed`)
+		require.NoError(t, key.Set(jwk.KeyIDKey, "a"), `key.Set should succeed`)
+
+		set := jwk.NewSet()
+		require.NoError(t, set.AddKey(key), `set.AddKey should succeed`)
+
+		encrypted, err := jwe.Encrypt(plaintext,
+			jwe.WithJSON(),
+			jwe.WithKey(jwa.A128KW(), key),
+		)
+		require.NoError(t, err, `jwe.Encrypt should succeed`)
+
+		msg, err := jwe.Parse(encrypted)
+		require.NoError(t, err, `jwe.Parse should succeed`)
+		require.Len(t, msg.Recipients(), 1, `a flattened message has one recipient`)
+
+		kid, ok := msg.Recipients()[0].Headers().KeyID()
+		require.True(t, ok, `flattened recipient should inherit "kid" from the protected header`)
+		require.Equal(t, "a", kid)
+
+		alg, ok := msg.Recipients()[0].Headers().Algorithm()
+		require.True(t, ok, `flattened recipient should inherit "alg" from the protected header`)
+		require.Equal(t, jwa.A128KW(), alg)
+
+		decrypted, err := jwe.Decrypt(encrypted, jwe.WithKeySet(set))
+		require.NoError(t, err, `jwe.Decrypt with the default key set options should succeed`)
+		require.Equal(t, plaintext, decrypted)
 	})
 
 	t.Run("compact", func(t *testing.T) {

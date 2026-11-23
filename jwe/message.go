@@ -360,17 +360,34 @@ func (m *Message) UnmarshalJSON(buf []byte) error {
 	if proxy.Headers != nil || len(proxy.EncryptedKey) > 0 {
 		recipient := NewRecipient()
 
-		// `"headers"` could be empty. If that's the case, just skip the
-		// following unmarshaling step
+		// A flattened message has a single recipient. Any header parameters
+		// that are not in the per-recipient "header" member are shared with
+		// the protected header, so seed the recipient from the protected
+		// header just like the compact parser does. Without this, routing
+		// parameters such as "alg" and "kid" disappear when encryption
+		// folded them into the protected header.
+		hdrs, err := recipientHeadersFromProtected(h)
+		if err != nil {
+			return fmt.Errorf(`failed to populate recipient headers from protected headers: %w`, err)
+		}
+
+		// The per-recipient "header" member is optional. When present, its
+		// values override the inherited protected-header values so that
+		// conflicts remain visible to the alg-consistency check in Decrypt.
 		if proxy.Headers != nil {
-			hdrs := NewHeaders()
-			if err := json.Unmarshal(proxy.Headers, hdrs); err != nil {
+			perRecipient := NewHeaders()
+			if err := json.Unmarshal(proxy.Headers, perRecipient); err != nil {
 				return fmt.Errorf(`failed to decode headers field: %w`, err)
 			}
 
-			if err := recipient.SetHeaders(hdrs); err != nil {
-				return fmt.Errorf(`failed to set new headers: %w`, err)
+			hdrs, err = hdrs.Merge(perRecipient)
+			if err != nil {
+				return fmt.Errorf(`failed to merge per-recipient headers: %w`, err)
 			}
+		}
+
+		if err := recipient.SetHeaders(hdrs); err != nil {
+			return fmt.Errorf(`failed to set new headers: %w`, err)
 		}
 
 		if v := proxy.EncryptedKey; len(v) > 0 {
@@ -454,16 +471,25 @@ func (m *Message) UnmarshalJSON(buf []byte) error {
 	return nil
 }
 
-func (m *Message) makeDummyRecipient(enckeybuf string, protected Headers) error {
-	// Recipients in this case should not contain the content encryption key,
-	// so move that out
+func recipientHeadersFromProtected(protected Headers) (Headers, error) {
 	hdrs, err := protected.Clone()
 	if err != nil {
-		return fmt.Errorf(`failed to clone headers: %w`, err)
+		return nil, fmt.Errorf(`failed to clone headers: %w`, err)
 	}
 
 	if err := hdrs.Remove(ContentEncryptionKey); err != nil {
-		return fmt.Errorf(`failed to remove %#v from public header: %w`, ContentEncryptionKey, err)
+		return nil, fmt.Errorf(`failed to remove %#v from public header: %w`, ContentEncryptionKey, err)
+	}
+
+	return hdrs, nil
+}
+
+func (m *Message) makeDummyRecipient(enckeybuf string, protected Headers) error {
+	// Recipients in this case should not contain the content encryption key,
+	// so move that out
+	hdrs, err := recipientHeadersFromProtected(protected)
+	if err != nil {
+		return err
 	}
 
 	enckey, err := base64.DecodeString(enckeybuf)
